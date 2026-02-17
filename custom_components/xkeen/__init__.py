@@ -10,19 +10,19 @@ _LOGGER = logging.getLogger(__name__)
 DOMAIN = "xkeen"
 SERVICE_ADD_DOMAIN = "add_domain"
 
+# Теперь запрашиваем тег вместо индекса
 ADD_DOMAIN_SCHEMA = vol.Schema({
     vol.Required("domain"): cv.string,
-    vol.Optional("rule_index", default=2): cv.positive_int,
+    vol.Required("outbound_tag"): cv.string,
 })
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Настройка интеграции через UI."""
     url = entry.data.get("url")
     token = entry.data.get("token")
 
     async def handle_add_domain(call: ServiceCall):
         target_domain = call.data.get("domain")
-        rule_idx = call.data.get("rule_index")
+        tag = call.data.get("outbound_tag")
 
         async with aiohttp.ClientSession() as session:
             headers = {"x-api-token": token}
@@ -30,35 +30,48 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # 1. Fetch
                 async with session.get(f"{url}/api/fetch", headers=headers) as resp:
                     if resp.status != 200:
-                        _LOGGER.error("Failed to fetch config")
+                        _LOGGER.error(f"Error fetching: {resp.status}")
                         return
                     data = await resp.json()
                 
-                # 2. Modify
+                # 2. Find rule by tag
                 rules = data['routing']['routing']['rules']
-                if rule_idx < len(rules):
-                    if 'domain' not in rules[rule_idx]:
-                        rules[rule_idx]['domain'] = []
-                    if target_domain not in rules[rule_idx]['domain']:
-                        rules[rule_idx]['domain'].append(target_domain)
+                target_rule = None
+                for rule in rules:
+                    if rule.get('outboundTag') == tag:
+                        target_rule = rule
+                        break
+                
+                if target_rule:
+                    if 'domain' not in target_rule:
+                        target_rule['domain'] = []
+                    if target_domain not in target_rule['domain']:
+                        target_rule['domain'].append(target_domain)
+                        _LOGGER.info(f"Added {target_domain} to {tag}")
                     else:
+                        _LOGGER.info(f"Domain {target_domain} already in {tag}")
                         return
+                else:
+                    _LOGGER.error(f"Rule with tag {tag} not found!")
+                    return
 
                 # 3. Push
-                payload = {"outbounds": data['outbounds'], "routing": data['routing']['routing']}
+                payload = {
+                    "outbounds": data['outbounds'], 
+                    "routing": data['routing']['routing']
+                }
                 async with session.post(f"{url}/api/push", json=payload, headers=headers) as resp:
                     if resp.status == 200:
-                        _LOGGER.info(f"Domain {target_domain} added successfully")
+                        _LOGGER.info("Config pushed successfully")
                     else:
-                        _LOGGER.error("Failed to push config")
+                        _LOGGER.error(f"Error pushing: {resp.status}")
 
             except Exception as e:
-                _LOGGER.error(f"Connection error: {e}")
+                _LOGGER.error(f"Connection failed: {e}")
 
     hass.services.async_register(DOMAIN, SERVICE_ADD_DOMAIN, handle_add_domain, schema=ADD_DOMAIN_SCHEMA)
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Удаление интеграции."""
     hass.services.async_remove(DOMAIN, SERVICE_ADD_DOMAIN)
     return True
