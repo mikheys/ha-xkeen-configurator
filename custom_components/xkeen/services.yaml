@@ -1,0 +1,18 @@
+add_domain:
+  name: Add Domain to Routing
+  description: Adds a new domain to a specific outbound rule in xKeen.
+  fields:
+    domain:
+      name: Domain
+      description: The domain name or geosite tag to add (e.g. google.com or ext:geosite.dat:google).
+      example: "kinopoisk.ru"
+      required: true
+      selector:
+        text:
+    outbound_tag:
+      name: Outbound Tag
+      description: The tag of the outbound connection where to add the domain.
+      example: "vless-reality"
+      required: true
+      selector:
+        text:
