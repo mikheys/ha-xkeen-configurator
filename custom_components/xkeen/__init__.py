@@ -10,7 +10,6 @@ _LOGGER = logging.getLogger(__name__)
 DOMAIN = "xkeen"
 SERVICE_ADD_DOMAIN = "add_domain"
 
-# Теперь запрашиваем тег вместо индекса
 ADD_DOMAIN_SCHEMA = vol.Schema({
     vol.Required("domain"): cv.string,
     vol.Required("outbound_tag"): cv.string,
@@ -30,29 +29,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # 1. Fetch
                 async with session.get(f"{url}/api/fetch", headers=headers) as resp:
                     if resp.status != 200:
-                        _LOGGER.error(f"Error fetching: {resp.status}")
+                        _LOGGER.error(f"Failed to fetch: {resp.status}")
                         return
                     data = await resp.json()
                 
-                # 2. Find rule by tag
+                # 2. Smart Rule Selection
                 rules = data['routing']['routing']['rules']
                 target_rule = None
+                
                 for rule in rules:
+                    # Ищем правило с нужным тегом, в котором либо уже есть домены, 
+                    # либо нет IP (чтобы не перепутать с правилом для IP)
                     if rule.get('outboundTag') == tag:
-                        target_rule = rule
-                        break
+                        if 'domain' in rule or 'ip' not in rule:
+                            target_rule = rule
+                            break
                 
                 if target_rule:
                     if 'domain' not in target_rule:
                         target_rule['domain'] = []
                     if target_domain not in target_rule['domain']:
                         target_rule['domain'].append(target_domain)
-                        _LOGGER.info(f"Added {target_domain} to {tag}")
+                        _LOGGER.info(f"Successfully added {target_domain} to {tag}")
                     else:
-                        _LOGGER.info(f"Domain {target_domain} already in {tag}")
+                        _LOGGER.info(f"Domain {target_domain} already exists in {tag}")
                         return
                 else:
-                    _LOGGER.error(f"Rule with tag {tag} not found!")
+                    _LOGGER.error(f"Compatible rule for domains with tag '{tag}' not found")
                     return
 
                 # 3. Push
@@ -62,9 +65,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 }
                 async with session.post(f"{url}/api/push", json=payload, headers=headers) as resp:
                     if resp.status == 200:
-                        _LOGGER.info("Config pushed successfully")
+                        _LOGGER.info("Configuration updated and pushed")
                     else:
-                        _LOGGER.error(f"Error pushing: {resp.status}")
+                        _LOGGER.error(f"Failed to push: {resp.status}")
 
             except Exception as e:
                 _LOGGER.error(f"Connection failed: {e}")
