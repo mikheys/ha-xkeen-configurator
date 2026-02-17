@@ -4,7 +4,7 @@
   "documentation": "https://github.com/mikheys/xkeen-configurator",
   "dependencies": [],
   "codeowners": ["@mikheys"],
-  "version": "1.2.2",
+  "version": "1.2.4",
   "config_flow": true,
   "iot_class": "local_polling"
 }

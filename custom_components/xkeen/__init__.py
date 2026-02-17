@@ -16,14 +16,14 @@ ADD_DOMAIN_SCHEMA = vol.Schema({
 })
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    url = entry.data.get("url").rstrip("/") # Убираем слеш в конце если есть
+    url = entry.data.get("url").rstrip("/")
     token = entry.data.get("token")
 
     async def handle_add_domain(call: ServiceCall):
         target_domain = call.data.get("domain")
         tag = call.data.get("outbound_tag")
         
-        _LOGGER.debug(f"Attempting to add domain {target_domain} to tag {tag} at {url}")
+        _LOGGER.info(f"xKeen: Adding {target_domain} to tag {tag}")
 
         async with aiohttp.ClientSession() as session:
             headers = {"x-api-token": token}
@@ -31,53 +31,47 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # 1. Fetch
                 async with session.get(f"{url}/api/fetch", headers=headers, timeout=10) as resp:
                     if resp.status != 200:
-                        _LOGGER.error(f"Failed to fetch config. Status: {resp.status}. URL: {url}/api/fetch")
+                        _LOGGER.error(f"xKeen Fetch Failed: {resp.status}")
                         return
                     data = await resp.json()
                 
-                # 2. Smart Rule Selection
-                rules = data['routing']['routing']['rules']
+                # 2. Smart Find
+                # data['routing'] содержит { "routing": { "rules": [...] } }
+                routing_obj = data['routing']
+                rules = routing_obj['routing']['rules']
                 target_rule = None
                 
                 for rule in rules:
                     if rule.get('outboundTag') == tag:
-                        # Ищем правило, где домены - это список (array)
-                        if 'domain' in rule and isinstance(rule['domain'], list):
-                            target_rule = rule
-                            break
-                        # Если списка нет, но это подходящий тег и в нем нет IP
-                        if 'domain' not in rule and 'ip' not in rule:
+                        if 'domain' in rule:
                             target_rule = rule
                             break
                 
-                if target_rule:
-                    if 'domain' not in target_rule:
-                        target_rule['domain'] = []
-                    if target_domain not in target_rule['domain']:
-                        target_rule['domain'].append(target_domain)
-                        _LOGGER.info(f"Added {target_domain} to rule with tag {tag}")
-                    else:
-                        _LOGGER.warning(f"Domain {target_domain} already exists in {tag}")
-                        return
-                else:
-                    _LOGGER.error(f"No valid rule with outboundTag '{tag}' found for domains")
+                if not target_rule:
+                    _LOGGER.error(f"xKeen Error: No rule with tag '{tag}' found")
                     return
 
+                if target_domain in target_rule['domain']:
+                    _LOGGER.warning(f"xKeen: {target_domain} already exists")
+                    return
+
+                target_rule['domain'].append(target_domain)
+
                 # 3. Push
-                # Важно: убираем наши служебные поля типа _expanded перед отправкой
+                # ВАЖНО: Мы должны отправить объект В ТОЙ ЖЕ СТРУКТУРЕ, что получили
                 payload = {
-                    "outbounds": data['outbounds'], 
-                    "routing": data['routing']['routing']
+                    "outbounds": data['outbounds'], # Это уже { "outbounds": [...] }
+                    "routing": routing_obj          # Это должно быть { "routing": { "rules": [...] } }
                 }
                 
-                async with session.post(f"{url}/api/push", json=payload, headers=headers, timeout=10) as resp:
+                async with session.post(f"{url}/api/push", json=payload, headers=headers, timeout=15) as resp:
                     if resp.status == 200:
-                        _LOGGER.info("Config successfully pushed to router")
+                        _LOGGER.info(f"xKeen: Successfully added {target_domain}")
                     else:
-                        _LOGGER.error(f"Failed to push config. Status: {resp.status}")
+                        _LOGGER.error(f"xKeen Push Failed: {resp.status}")
 
             except Exception as e:
-                _LOGGER.error(f"XKeen integration error: {e}")
+                _LOGGER.error(f"xKeen Connection Error: {e}")
 
     hass.services.async_register(DOMAIN, SERVICE_ADD_DOMAIN, handle_add_domain, schema=ADD_DOMAIN_SCHEMA)
     return True
