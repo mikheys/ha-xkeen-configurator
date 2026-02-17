@@ -1,81 +1,64 @@
 import logging
-import voluptuous as vol
 import aiohttp
-import json
-import homeassistant.helpers.config_validation as cv
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
+import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
 
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "xkeen"
-CONF_URL = "url"
-CONF_TOKEN = "token"
-
-# Описание параметров для сервиса добавления домена
 SERVICE_ADD_DOMAIN = "add_domain"
-ATTR_DOMAIN = "domain"
-ATTR_RULE_INDEX = "rule_index" # По умолчанию 2 (обычно там VPS список)
 
 ADD_DOMAIN_SCHEMA = vol.Schema({
-    vol.Required(ATTR_DOMAIN): cv.string,
-    vol.Optional(ATTR_RULE_INDEX, default=2): cv.positive_int,
+    vol.Required("domain"): cv.string,
+    vol.Optional("rule_index", default=2): cv.positive_int,
 })
 
-async def async_setup(hass: HomeAssistant, config: dict):
-    """Настройка интеграции xKeen через configuration.yaml."""
-    conf = config.get(DOMAIN)
-    if conf is None:
-        return True
-
-    url = conf.get(CONF_URL)
-    token = conf.get(CONF_TOKEN)
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Настройка интеграции через UI."""
+    url = entry.data.get("url")
+    token = entry.data.get("token")
 
     async def handle_add_domain(call: ServiceCall):
-        """Логика добавления домена через API xkeen-ui."""
-        target_domain = call.data.get(ATTR_DOMAIN)
-        rule_idx = call.data.get(ATTR_RULE_INDEX)
+        target_domain = call.data.get("domain")
+        rule_idx = call.data.get("rule_index")
 
-        # 1. Fetch current config
         async with aiohttp.ClientSession() as session:
             headers = {"x-api-token": token}
             try:
-                # Получаем текущие файлы
+                # 1. Fetch
                 async with session.get(f"{url}/api/fetch", headers=headers) as resp:
                     if resp.status != 200:
-                        _LOGGER.error("Failed to fetch config from xkeen-ui")
+                        _LOGGER.error("Failed to fetch config")
                         return
                     data = await resp.json()
-                    
-                outbounds = data['outbounds']
-                routing = data['routing']
-
-                # 2. Modify routing
-                rules = routing['routing']['rules']
+                
+                # 2. Modify
+                rules = data['routing']['routing']['rules']
                 if rule_idx < len(rules):
                     if 'domain' not in rules[rule_idx]:
                         rules[rule_idx]['domain'] = []
-                    
                     if target_domain not in rules[rule_idx]['domain']:
                         rules[rule_idx]['domain'].append(target_domain)
-                        _LOGGER.info(f"Adding {target_domain} to rule {rule_idx}")
                     else:
-                        _LOGGER.info(f"Domain {target_domain} already exists")
                         return
 
-                # 3. Push back
-                payload = {
-                    "outbounds": outbounds,
-                    "routing": routing['routing']
-                }
+                # 3. Push
+                payload = {"outbounds": data['outbounds'], "routing": data['routing']['routing']}
                 async with session.post(f"{url}/api/push", json=payload, headers=headers) as resp:
                     if resp.status == 200:
-                        hass.bus.async_fire("xkeen_config_updated", {"domain": target_domain})
+                        _LOGGER.info(f"Domain {target_domain} added successfully")
                     else:
-                        _LOGGER.error("Failed to push updated config to xkeen-ui")
+                        _LOGGER.error("Failed to push config")
 
             except Exception as e:
-                _LOGGER.error(f"Error connecting to xkeen-ui: {e}")
+                _LOGGER.error(f"Connection error: {e}")
 
     hass.services.async_register(DOMAIN, SERVICE_ADD_DOMAIN, handle_add_domain, schema=ADD_DOMAIN_SCHEMA)
+    return True
 
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Удаление интеграции."""
+    hass.services.async_remove(DOMAIN, SERVICE_ADD_DOMAIN)
     return True
